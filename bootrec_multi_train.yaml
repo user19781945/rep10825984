@@ -1,0 +1,50 @@
+exp_name : bootrec_multi_train
+solvers: solvers_unsup
+
+model_type: DnCn
+model_params:
+    in_channels: 2
+    out_channels: 2
+    nc: 8
+    nd: 8
+
+forward_method: forward_dccnn_boot
+init_method : tcp://localhost:1836
+nodes : 1
+gpus : 1
+use_init_weights : False
+init_type : xavier
+gain : 1.0
+seed : 20
+lr : 0.0001
+batch_size : 4
+num_workers : 8
+warmup_epochs : 5
+num_epochs : 100
+n: 0
+m: 1
+prob_mask: "./masks/30_remask.npy"
+
+dataset_type: CustomFastMRIDataSet
+dataset_params:
+    train:
+        data_path: ./example_data/fastmri/multi_coil_val
+        mask_configs:
+        - type: fixed
+          path: ./masks/30_mask.npy
+        sample_rate: 1.
+    val:
+        data_path: ./example_data/fastmri/multi_coil_val
+        mask_configs:
+        - type: fixed
+          path: ./masks/30_mask.npy
+        sample_rate: 1.
+    test:
+        data_path: ./example_data/fastmri/multi_coil_val
+        mask_configs:
+        - type: fixed
+          path: ./masks/30_mask.npy
+        sample_rate: 1.
+
+mode : train
+pretrained : False
