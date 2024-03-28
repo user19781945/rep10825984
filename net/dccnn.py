@@ -62,7 +62,7 @@ class DnCn(nn.Module):
         nd: int = 5,
         **kwargs):
         super(DnCn, self).__init__()
-        n_channels=2;nc=5;nd=5
+        n_channels=in_channels
         
         self.nc = nc
         self.nd = nd

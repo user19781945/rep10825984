@@ -1,14 +1,14 @@
 exp_name : bootRec_zs
-solvers: solvers_per
+solvers: solvers_per2d
 
 model_type: DnCn
 model_params:
     in_channels: 2
     out_channels: 2
-    nc: 8
-    nd: 8
+    nc: 5
+    nd: 5
 
-forward_method: forward_dccnn_boot_per
+forward_method: forward_dccnn_boot_per2d
 init_method : tcp://localhost:1835
 nodes : 1
 gpus : 1
@@ -19,14 +19,14 @@ seed : 20
 lr : 0.0001
 num_workers : 8
 warmup_epochs : 5
-num_epochs : 100
+num_epochs : 10
 inner_epochs: 100
 n: 0
 m: 1
 prob_mask: "./masks/30_remask.npy"
 same_mask: True
 
-dataset_type: CustomFastMRIDataSet
+dataset_type: CustomNormFastMRIDataSet
 dataset_params:
     train:
         data_path: ./example_data/fastmri/multi_coil_val

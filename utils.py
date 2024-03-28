@@ -8,6 +8,17 @@ import json
 import os
 import shutil
 
+class MixL1L2Loss(nn.Module):
+    def __init__(self, eps=1e-6,scalar=1/2):
+        super().__init__()
+        #self.mse = nn.MSELoss()
+        self.eps = eps
+        self.scalar=scalar
+    def forward(self, yhat, y):
+
+        loss = self.scalar*(torch.norm(yhat-y) / torch.norm(y)) + self.scalar*(torch.norm(yhat-y,p=1) / torch.norm(y, p=1))
+        
+        return loss
 
 def complex2real(data, axis=-1):
     assert type(data) is np.ndarray
@@ -161,7 +172,7 @@ class BootRecorder:
         exp_dict={"fnames":self.fnames,"gt_mses":self.gt_mses,"boot_mses":self.boot_mses,"boot_vars":self.boot_vars}
         frame=pd.DataFrame(exp_dict)
         frame.to_csv(os.path.join(self.path,"boot_record.csv"))
-        
+
 def generate_re_mask(lambda_mask,p_Lambda,args):
     n=args.n
     if n>1:

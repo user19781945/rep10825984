@@ -27,7 +27,7 @@ from forward_methods import *
 from net import *
 from dataset import *
 from mri_tools import *
-from utils import psnr_slice, ssim_slice, get_cos_similar_matrix, get_cos_similar
+from utils import *
 
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
@@ -96,7 +96,7 @@ def init_weights(net, init_type='xavier', gain=1.0):
             nn.init.constant_(m.bias.data, 0.0)
     net.apply(init_func)
     
-def solvers_per(rank, ngpus_per_node, args):
+def solvers_per2d(rank, ngpus_per_node, args):
     forward=globals()[args.forward_method]
     Dataset=globals()[args.dataset_type]
     
@@ -109,11 +109,11 @@ def solvers_per(rank, ngpus_per_node, args):
     
     train_set_all = Dataset(**vars(args.dataset_params.train))
     origin_exp_name=args.exp_name
-    for indice in range(len(train_set_all.files)):
-        train_set=torch.utils.data.Subset(train_set_all, train_set_all.indices[indice])
-        data_name=train_set_all.files[indice].name.split(".")[0]
-        args.exp_name=origin_exp_name+"/"+data_name
-        logger.info("Running Experiment on data {}".format(data_name))
+    for indice in range(len(train_set_all)):
+        train_set=torch.utils.data.Subset(train_set_all, [indice])
+        data_name=train_set_all.examples[indice][0].name.split(".")[0]
+        args.exp_name=origin_exp_name+"/"+data_name+"/"+str(train_set_all.examples[indice][1])
+        logger.info("Running Experiment on data {}".format(args.exp_name))
         args.loss_curve_path=os.path.join("./results",args.exp_name,"loss_curve")
         args.model_save_path=os.path.join("./results",args.exp_name,"checkpoints")
         os.makedirs(os.path.join("./results",args.exp_name),exist_ok=True)
@@ -153,11 +153,12 @@ def solvers_per(rank, ngpus_per_node, args):
         model = DDP(model, device_ids=[rank])
 
         # criterion, optimizer, learning rate scheduler
-        criterion = nn.MSELoss()
+        if getattr(args,"criterion",None):
+            print("Using loss:\t",args.criterion)
+            criterion = globals()[args.criterion]()
+        else:
+            criterion = nn.MSELoss()
         optimizer = optim.Adam([{'params': model.parameters(), 'lr': args.lr}])
-        if not args.pretrained:
-            warm_up = lambda epoch: epoch / args.warmup_epochs if epoch <= args.warmup_epochs else 1
-            scheduler_wu = torch.optim.lr_scheduler.LambdaLR(optimizer=optimizer, lr_lambda=warm_up)
 
         if hasattr(args,"distillee_params"):
             buil_distillee_model(args.distillee_params)
@@ -165,11 +166,11 @@ def solvers_per(rank, ngpus_per_node, args):
         # test step
         if args.mode == 'test':
             if rank == 0:
-                logger.info('The size of test dataset is {}.'.format(len(test_set)))
+                logger.info('The size of test dataset is {}.'.format(len(train_set)))
                 logger.info('Now testing {}.'.format(args.exp_name))
             model.eval()
             with torch.no_grad():
-                test_log = []
+                test_log = [start_epoch]
                 start_time = time.time()
                 test_log = forward('test', rank, model, train_loader, criterion, optimizer, test_log, args)
                 test_time = time.time() - start_time
@@ -201,7 +202,7 @@ def solvers_per(rank, ngpus_per_node, args):
             train_log = forward('train', rank, model, train_loader, criterion, optimizer, train_log, args)
             model.eval()
             with torch.no_grad():
-                train_log = forward('val', rank, model, train_loader, criterion, optimizer, train_log, args)
+                train_log = forward('val', rank, model, train_loader, criterion, None, train_log, args)
             epoch_time = time.time() - epoch_start_time
             # train information
             epoch = train_log[0]
@@ -220,7 +221,7 @@ def solvers_per(rank, ngpus_per_node, args):
 
             if rank == 0:
                 logger.info('epoch:{:<8d}time:{:.5f}s\tlr:{:.8f}\ttrain_loss:{:.7f}\tval_loss:{:.7f}\tval_psnr:{:.5f}\t'
-                            'val_ssim:{:.5f}'.format(epoch, epoch_time, lr, train_loss, val_loss, val_psnr, val_ssim))
+                            'val_ssim:{:.5f}\t'.format(epoch, epoch_time, lr, train_loss, val_loss, val_psnr, val_ssim))
                 writer.add_scalars('loss', {'train_loss': train_loss, 'val_loss': val_loss}, epoch)
                 # save checkpoint
                 checkpoint = {
@@ -235,9 +236,6 @@ def solvers_per(rank, ngpus_per_node, args):
                 best_model_path = os.path.join(args.model_save_path, 'best_checkpoint_dc_3x(1).pth.tar')
                 torch.save(checkpoint, model_path)
                 shutil.copy(model_path, best_model_path)
-            # scheduler
-            if epoch <= args.warmup_epochs and not args.pretrained:
-                scheduler_wu.step()
         if rank == 0:
             writer.close()
         np.savetxt(os.path.join("./results",args.exp_name,"dc_train_loss_3x(1).txt"), trains, fmt='%.5f', delimiter=" ")
@@ -264,6 +262,7 @@ def solvers_per(rank, ngpus_per_node, args):
         plt.show()
         name = os.path.join("./results",args.exp_name,str(time.time()) + '_dc_3x(1).jpg')
         plt.savefig(name)
+
 
 
 def main():

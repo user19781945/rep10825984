@@ -16,7 +16,3 @@ python main.py --cfg-path ./bootstrap_estimate_test.yaml
 ```bash
 python main_per.py --cfg-path ./bootrec2d_zs_train.yaml
 ```
-### for normal multiple images training
-```bash
-python main.py --cfg-path ./bootrec_multi_train.yaml
-```

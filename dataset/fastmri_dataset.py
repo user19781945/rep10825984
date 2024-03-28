@@ -135,3 +135,14 @@ class CustomFastMRIDataSet(Dataset):
             "encoding_size": enc_size,
             "recon_size": recon_size,
         }
+
+class CustomNormFastMRIDataSet(CustomFastMRIDataSet):
+    def __init__(self, data_path, mask_configs, sample_rate):
+        super().__init__(data_path, mask_configs, sample_rate)
+
+    def __getitem__(self, item):
+        d=super().__getitem__(item)
+        d[0]=d[0]/1e6
+        d[0]=d[0]/d[0].abs().max()
+
+        return d
