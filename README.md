@@ -16,3 +16,6 @@ python main.py --cfg-path ./bootstrap_estimate_test.yaml
 ```bash
 python main_per.py --cfg-path ./bootrec2d_zs_train.yaml
 ```
+
+## Error Maps for Reference
+![error_maps](error_maps.png)
