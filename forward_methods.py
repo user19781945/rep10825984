@@ -26,12 +26,12 @@ from torch.utils.tensorboard import SummaryWriter
 from mri_tools import *
 from utils import *
 
-def forward_dccnn_boot_test_only(mode, rank, model, dataloader, criterion, optimizer, log, args):
+def forward_dccnn_boot_test_only(mode, rank, model, dataloader, criterion, optimizer, args):
     assert mode in ["val","test"], "This method can only be used in test!"
     if mode=="val":
-        recorder = BootRecorder(os.path.join("./results", args.exp_name, f"epoch{log[0]}_samples_m{args.m}_n{args.n}"))
+        recorder = BootRecorder(os.path.join("./results", args.exp_name, f"boot_samples_val"))
     else:
-        recorder = BootRecorder(os.path.join("./results", args.exp_name, f"samples_m{args.m}_n{args.n}"))
+        recorder = BootRecorder(os.path.join("./results", args.exp_name, f"boot_samples_test"))
     t = tqdm(dataloader, desc=mode + 'ing',
              total=int(len(dataloader))) if rank == 0 else dataloader
     for iter_num, data_batch in enumerate(t):
@@ -53,7 +53,7 @@ def forward_dccnn_boot_test_only(mode, rank, model, dataloader, criterion, optim
         output_under_img=torch.sum(ifft2(output_under) * torch.conj(csm), dim=1)
         for _ in range(args.inner_epochs):
         
-            mask_net_up=generate_re_mask(mask_under,mask_prob,args)
+            mask_net_up=generate_re_mask(mask_under,under_kspace)
             input_kspace = full_kspace * mask_net_up[:, None, ...]
 
             output = model(input_kspace, csm, mask_net_up)
@@ -62,7 +62,7 @@ def forward_dccnn_boot_test_only(mode, rank, model, dataloader, criterion, optim
             
             boot_list=[output_img]
             for _ in range(args.m-1):
-                mask_net_up=generate_re_mask(mask_under,mask_prob,args)
+                mask_net_up=generate_re_mask(mask_under,under_kspace)
                 input_kspace = full_kspace * mask_net_up[:, None, ...]
                 output = model(input_kspace, csm, mask_net_up)
                 output_img=torch.sum(ifft2(output) * torch.conj(csm), dim=1)
@@ -86,7 +86,7 @@ def forward_dccnn_boot_test_only(mode, rank, model, dataloader, criterion, optim
             recorder.submit([torch.abs(output_under_img),label,gt_mse,mean_boot_img,boot_mse,boot_var], output_fnames)
             break
     recorder.export()
-    return log+[0,0,0]
+    return
     
 def forward_dccnn_boot_per(mode, rank, model, dataloader, criterion, optimizer, log, args):
     assert mode in ['train', 'val', 'test']
@@ -95,7 +95,7 @@ def forward_dccnn_boot_per(mode, rank, model, dataloader, criterion, optimizer, 
         if hasattr(args,"m_t"):
             args.m=args.m_t
         with torch.no_grad():
-            forward_dccnn_boot_test_only(mode, rank, model, dataloader, criterion, optimizer, log, args)
+            forward_dccnn_boot_test_only(mode, rank, model, dataloader, criterion, optimizer, args)
         args.m=m
             
     loss, psnr, ssim = 0.0, 0.0, 0.0
@@ -124,7 +124,7 @@ def forward_dccnn_boot_per(mode, rank, model, dataloader, criterion, optimizer, 
             if mode == 'train':
                 optimizer.zero_grad()
         
-            mask_net_up=generate_re_mask(mask_under,mask_prob,args)
+            mask_net_up=generate_re_mask(mask_under,under_kspace)
 
             if mode == 'test':
                 net_img_up = net_img_down = under_img
@@ -132,30 +132,28 @@ def forward_dccnn_boot_per(mode, rank, model, dataloader, criterion, optimizer, 
 
             input_kspace = full_kspace * mask_net_up[:, None, ...]
 
-            if mode == 'test':
-                with torch.no_grad():
-                    start_time = time.time()
-                    output = model(input_kspace, csm, mask_net_up)
-                    recorder.total_time += time.time()-start_time
-            else:
+            if mode == 'train':
                 output = model(input_kspace, csm, mask_net_up)
-            output=output*mask_under[:, None, ...]+output_under.detach()*(1-mask_under[:, None, ...])
-
+                output=output*mask_under[:, None, ...]+output_under.detach()*(1-mask_under[:, None, ...])
+            else:
+                with torch.no_grad():
+                    output = model(input_kspace, csm, mask_net_up)
+            loss_boot = criterion(torch.view_as_real(output),torch.view_as_real(output_under))/args.m
             output_img=torch.sum(ifft2(output) * torch.conj(csm), dim=1)
-            loss_boot = criterion(torch.abs(output_img),torch.abs(output_under_img))/args.m
             if mode=='train':
                 loss_boot.backward()
             batch_loss=loss_boot.item()
+            
             for _ in range(args.m-1):
-                mask_net_up=generate_re_mask(mask_under,mask_prob,args)
+                mask_net_up=generate_re_mask(mask_under,under_kspace)
                 input_kspace = full_kspace * mask_net_up[:, None, ...]
                 output = model(input_kspace, csm, mask_net_up)
                 output=output*mask_under[:, None, ...]+output_under.detach()*(1-mask_under[:, None, ...])
+                loss_boot = criterion(torch.view_as_real(output),torch.view_as_real(output_under))/args.m
                 output_img=torch.sum(ifft2(output) * torch.conj(csm), dim=1)
-                loss_boot = criterion(torch.abs(output_img),torch.abs(output_under_img))/args.m
                 if mode=='train':
                     loss_boot.backward()
-                    batch_loss+=loss_boot.item()
+                batch_loss+=loss_boot.item()
 
             loss += batch_loss
             print(batch_loss,end="\r")
@@ -163,7 +161,7 @@ def forward_dccnn_boot_per(mode, rank, model, dataloader, criterion, optimizer, 
             if mode == 'train':
                 optimizer.step()
             if mode!='train':
-                f_output = torch.sum(ifft2(output) * torch.conj(csm), dim=1)
+                f_output = output_under_img
                 output_path = os.path.join("./results", args.exp_name, "samples")
                 os.makedirs(output_path, exist_ok=True)
                 output_fnames = []
@@ -177,98 +175,13 @@ def forward_dccnn_boot_per(mode, rank, model, dataloader, criterion, optimizer, 
                 ssim += ssim_slice(label, f_output)
                 recorder.submit(label, f_output, output_fnames)
                 break
-    loss /= (len(dataloader)*args.inner_epochs)
-    log.append(loss)
     if mode == 'train':
+        loss /= (len(dataloader)*args.inner_epochs)
+        log.append(loss)
         curr_lr = optimizer.param_groups[0]['lr']
         log.append(curr_lr)
     else:
-        psnr /= len(dataloader)
-        ssim /= len(dataloader)
-        log.append(psnr)
-        log.append(ssim)
-        recorder.export()
-    return log
-
-def forward_dccnn_boot(mode, rank, model, dataloader, criterion, optimizer, log, args):
-    assert mode in ['train', 'val', 'test']
-    loss, psnr, ssim = 0.0, 0.0, 0.0
-    recorder = Recorder(os.path.join("./results", args.exp_name))
-    t = tqdm(dataloader, desc=mode + 'ing',
-             total=int(len(dataloader))) if rank == 0 else dataloader
-    for iter_num, data_batch in enumerate(t):
-        full_kspace = data_batch[0].to(rank, non_blocking=True)
-        csm = data_batch[1].to(rank, non_blocking=True)
-        mask_under = data_batch[2][0].to(rank, non_blocking=True)
-        fnames = data_batch[3]
-        slice_id = data_batch[4]
-        mask_prob=data_batch[5][0].to(rank, non_blocking=True)
-        
-        mask_net_up=generate_re_mask(mask_under,mask_prob,args)
-
-        label = torch.sum(ifft2(full_kspace) * torch.conj(csm), dim=1)
-
-        under_img = At(full_kspace, csm, mask_under)
-        under_img = torch.view_as_real(
-            under_img).permute(0, 3, 1, 2).contiguous()
-
-        if mode == 'test':
-            net_img_up = net_img_down = under_img
-            mask_net_up = mask_net_down = mask_under
-
-        input_kspace = full_kspace * mask_net_up[:, None, ...]
-        under_kspace = full_kspace * mask_under[:, None, ...]
-
-        if mode == 'test':
-            with torch.no_grad():
-                start_time = time.time()
-                output = model(input_kspace, csm, mask_net_up)
-                recorder.total_time += time.time()-start_time
-        else:
-            output = model(input_kspace, csm, mask_net_up)
-        with torch.no_grad():
-            output_under=model(under_kspace, csm, mask_under)
-        output=output*mask_under[:, None, ...]+output_under.detach()*(1-mask_under[:, None, ...])
-        
-        output_img=torch.sum(ifft2(output) * torch.conj(csm), dim=1)
-        output_under_img=torch.sum(ifft2(output_under) * torch.conj(csm), dim=1)
-        loss_boot = criterion(torch.abs(output_img),torch.abs(output_under_img))
-        for _ in range(args.m-1):
-            mask_net_up=generate_re_mask(mask_under,mask_prob,args)
-            input_kspace = full_kspace * mask_net_up[:, None, ...]
-            output = model(input_kspace, csm, mask_net_up)
-            output=output*mask_under[:, None, ...]+output_under.detach()*(1-mask_under[:, None, ...])
-            output_img=torch.sum(ifft2(output) * torch.conj(csm), dim=1)
-            loss_boot = loss_boot + criterion(torch.abs(output_img),torch.abs(output_under_img))
-
-        batch_loss = loss_boot
-
-        f_output = torch.sum(ifft2(output) * torch.conj(csm), dim=1)
-
-        if mode == 'train':
-            optimizer.zero_grad()
-            batch_loss.backward()
-            optimizer.step()
-        else:
-            output_path = os.path.join("./results", args.exp_name, "samples")
-            os.makedirs(output_path, exist_ok=True)
-            output_fnames = []
-            for i, fname in enumerate(fnames):
-                bname = os.path.basename(fname)
-                if bname.endswith(".h5"):
-                    bname = bname[:-3]+f"_{data_batch[4][i]}.png"
-                output_fnames.append(os.path.join(
-                    output_path, "rec_"+bname.replace("png", "npy")))
-            psnr += psnr_slice(label, f_output)
-            ssim += ssim_slice(label, f_output)
-            recorder.submit(label, f_output, output_fnames)
-        loss += batch_loss.item()
-    loss /= len(dataloader)
-    log.append(loss)
-    if mode == 'train':
-        curr_lr = optimizer.param_groups[0]['lr']
-        log.append(curr_lr)
-    else:
+        log.append(loss)
         psnr /= len(dataloader)
         ssim /= len(dataloader)
         log.append(psnr)

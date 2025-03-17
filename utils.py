@@ -173,18 +173,15 @@ class BootRecorder:
         frame=pd.DataFrame(exp_dict)
         frame.to_csv(os.path.join(self.path,"boot_record.csv"))
 
-def generate_re_mask(lambda_mask,p_Lambda,args):
-    n=args.n
-    if n>1:
-        assert not getattr(args,"prob_mask",None),"The specific prob mask {} in args is not working when n>1!".format(args.prob_mask)
-        p_re_lambda_mask=torch.zeros_like(lambda_mask)
-        p_re_lambda_mask[lambda_mask==1]=1-(1-1/n)**n
-        p_re_lambda_mask[p_Lambda==1]=1
-    else:
-        if type(args.prob_mask) is str:
-            args.prob_mask=torch.tensor(np.load(args.prob_mask)[None,...]).to(lambda_mask.device)
-        p_re_lambda_mask=args.prob_mask
-    if not getattr(args,"same_mask",False):
-        return (torch.rand_like(lambda_mask)<p_re_lambda_mask).float()
-    else:
-        return (torch.rand_like(lambda_mask)[:1]<p_re_lambda_mask).float()
+def generate_re_mask(mask, under_kspace):
+    under_kspace=under_kspace.squeeze()
+    if under_kspace.ndim==2:
+        under_kspace=under_kspace.unsqueeze(0)
+    assert under_kspace.ndim==3 ,"Must be (N-channel,N-row,N-col) k-space! Currently shape is {}".format(under_kspace.shape)
+    center_x=under_kspace.norm(p='fro',dim=[0,1]).argmax().item()
+    center_y=under_kspace.norm(p='fro',dim=[0,2]).argmax().item()
+    remask_prob=torch.ones_like(mask)*(1-(1-1/1000)**1000)
+    remask_prob[...,center_x-2:center_x+2,center_y-2:center_y+2]=1
+    remask_prob=mask*remask_prob
+    remask=(torch.rand_like(remask_prob)<remask_prob).float()
+    return remask.to(mask.device)

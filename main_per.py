@@ -32,6 +32,47 @@ from utils import *
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
 
+class MixL1L2Loss(nn.Module):
+    def __init__(self, eps=1e-6,scalar=1/2):
+        super().__init__()
+        #self.mse = nn.MSELoss()
+        self.eps = eps
+        self.scalar=scalar
+    def forward(self, yhat, y):
+
+        yhat=yhat.flatten(1);y=y.flatten(1)
+        loss = self.scalar*(torch.norm(yhat-y,dim=1) / torch.norm(y,dim=1)) + self.scalar*(torch.norm(yhat-y,p=1,dim=1) / torch.norm(y, p=1,dim=1))
+        return loss.mean(dim=0)
+class EarlyStop:
+    def __init__(self, warmup=5, patient=25, larger_better=False):
+        self.larger_better=larger_better
+        if self.larger_better:
+            self.best_val=-np.inf
+        else:
+            self.best_val=np.inf
+        self.values=[]
+        self.patient=patient
+        self.init_patient=patient
+        self.warmup=warmup
+    def submit(self, value):
+        self.values.append(value)
+        if self.larger_better:
+            if value>self.best_val:
+                self.best_val=value
+                self.patient=self.init_patient
+            else:
+                self.patient-=1
+        else:
+            if value<self.best_val:
+                self.best_val=value
+                self.patient=self.init_patient
+            else:
+                self.patient-=1
+    def should_stop(self):
+        return self.patient<1
+    def current_is_best(self):
+        return self.patient==self.init_patient
+
 def dict2namespace(config):
     namespace = argparse.Namespace()
     for key, value in config.items():
@@ -152,16 +193,8 @@ def solvers_per2d(rank, ngpus_per_node, args):
         model = model.to(rank)
         model = DDP(model, device_ids=[rank])
 
-        # criterion, optimizer, learning rate scheduler
-        if getattr(args,"criterion",None):
-            print("Using loss:\t",args.criterion)
-            criterion = globals()[args.criterion]()
-        else:
-            criterion = nn.MSELoss()
+        criterion = MixL1L2Loss()
         optimizer = optim.Adam([{'params': model.parameters(), 'lr': args.lr}])
-
-        if hasattr(args,"distillee_params"):
-            buil_distillee_model(args.distillee_params)
 
         # test step
         if args.mode == 'test':
@@ -188,11 +221,16 @@ def solvers_per2d(rank, ngpus_per_node, args):
             logger.info('Now training {}.'.format(args.exp_name))
             writer = SummaryWriter(args.loss_curve_path)
         # loss curve
-        epochs = []
-        trains = []
-        vals = []
-        psnr = []
-        ssim = []
+        early_stopper=EarlyStop()
+        epochs = [];trains = []
+        vals = [];psnr = [];ssim = []
+
+        model.eval()
+        with torch.no_grad():
+            val_log = forward('val', rank, model, train_loader, criterion, None, [0], args)
+        val_loss = val_log[1];val_psnr = val_log[2];val_ssim = val_log[3]
+        vals.append(val_loss);psnr.append(val_psnr);ssim.append(val_ssim)
+        logger.info('init\tval_loss:{:.7f}\tval_psnr:{:.5f}\tval_ssim:{:.5f}'.format(val_loss, val_psnr, val_ssim))
         for epoch in range(start_epoch + 1, args.num_epochs + 1):
             train_sampler.set_epoch(epoch)
             train_log = [epoch]
@@ -205,19 +243,15 @@ def solvers_per2d(rank, ngpus_per_node, args):
                 train_log = forward('val', rank, model, train_loader, criterion, None, train_log, args)
             epoch_time = time.time() - epoch_start_time
             # train information
-            epoch = train_log[0]
-            train_loss = train_log[1]
-            lr = train_log[2]
-            val_loss = train_log[3]
-            val_psnr = train_log[4]
-            val_ssim = train_log[5]
+            epoch = train_log[0];train_loss = train_log[1];lr = train_log[2]
+            val_loss = train_log[3];val_psnr = train_log[4];val_ssim = train_log[5]
+
+            if epoch==start_epoch+1:
+                early_stopper.submit(val_loss+train_loss)
 
             # add loss
-            epochs.append(epoch)
-            trains.append(train_loss)
-            vals.append(val_loss)
-            psnr.append(val_psnr)
-            ssim.append(val_ssim)
+            epochs.append(epoch);trains.append(train_loss)
+            vals.append(val_loss);psnr.append(val_psnr);ssim.append(val_ssim)
 
             if rank == 0:
                 logger.info('epoch:{:<8d}time:{:.5f}s\tlr:{:.8f}\ttrain_loss:{:.7f}\tval_loss:{:.7f}\tval_psnr:{:.5f}\t'
@@ -235,34 +269,22 @@ def solvers_per2d(rank, ngpus_per_node, args):
                 model_path = os.path.join(args.model_save_path, 'checkpoint_dc_3x(1).pth.tar')
                 best_model_path = os.path.join(args.model_save_path, 'best_checkpoint_dc_3x(1).pth.tar')
                 torch.save(checkpoint, model_path)
-                shutil.copy(model_path, best_model_path)
+                
+                early_stopper.submit(train_loss+val_loss)
+                
+                if early_stopper.current_is_best():
+                    logger.info("Update best model at epoch {}.".format(epoch))
+                    shutil.copy(model_path, best_model_path)
+                if early_stopper.should_stop():
+                    logger.info("Early Stop Training at epoch {}.".format(epoch))
+                    break
+                
         if rank == 0:
             writer.close()
         np.savetxt(os.path.join("./results",args.exp_name,"dc_train_loss_3x(1).txt"), trains, fmt='%.5f', delimiter=" ")
         np.savetxt(os.path.join("./results",args.exp_name,"dc_val_loss_3x(1).txt"), vals, fmt='%.5f', delimiter=" ")
         np.savetxt(os.path.join("./results",args.exp_name,"dc_val_psnr_3x(1).txt"), psnr, fmt='%.5f', delimiter=" ")
         np.savetxt(os.path.join("./results",args.exp_name,"dc_val_ssim_3x(1).txt"), ssim, fmt='%.5f', delimiter=" ")
-
-        # plot curve
-        plt.ion()
-        x = range(0, len(epochs))
-        plt.subplot(1, 3, 1)
-        plt.plot(x, trains)
-        plt.plot(x, vals)
-        plt.xlabel('epoch')
-        plt.ylabel('loss')
-        plt.subplot(1, 3, 2)
-        plt.plot(x, psnr)
-        plt.xlabel('epoch')
-        plt.ylabel('psnr')
-        plt.subplot(1, 3, 3)
-        plt.plot(x, ssim)
-        plt.xlabel('epoch')
-        plt.ylabel('ssim')
-        plt.show()
-        name = os.path.join("./results",args.exp_name,str(time.time()) + '_dc_3x(1).jpg')
-        plt.savefig(name)
-
 
 
 def main():

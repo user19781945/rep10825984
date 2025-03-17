@@ -5,10 +5,10 @@ model_type: DnCn
 model_params:
     in_channels: 2
     out_channels: 2
-    nc: 5
-    nd: 5
+    nc: 10
+    nd: 10
 
-forward_method: forward_dccnn_boot_per2d
+forward_method: forward_dccnn_boot_per
 init_method : tcp://localhost:1835
 nodes : 1
 gpus : 1
@@ -16,26 +16,25 @@ use_init_weights : False
 init_type : xavier
 gain : 1.0
 seed : 20
-lr : 0.0001
+lr : 0.001
 num_workers : 8
 warmup_epochs : 5
-num_epochs : 10
-inner_epochs: 100
+num_epochs : 300
+inner_epochs: 25
 n: 0
 m: 1
-prob_mask: "./masks/30_remask.npy"
 same_mask: True
 
 dataset_type: CustomNormFastMRIDataSet
 dataset_params:
     train:
-        data_path: ./example_data/fastmri/multi_coil_val
+        data_path: /dataset/fastmri/multicoil_val  #./example_data/fastmri/multi_coil_val
         mask_configs:
         - type: fixed
           path: ./masks/30_mask.npy
         sample_rate: 1.
     test:
-        data_path: ./example_data/fastmri/multi_coil_val
+        data_path: /dataset/fastmri/multicoil_val  #./example_data/fastmri/multi_coil_val
         mask_configs:
         - type: fixed
           path: ./masks/30_mask.npy
