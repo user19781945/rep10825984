@@ -47,7 +47,7 @@ def et_query(
     return str(value.text)
 
     
-class CustomFastMRIDataSet(Dataset):
+class CustomNormFastMRIDataSet(Dataset):
     def __init__(self, data_path, mask_configs, sample_rate):
         self.data_path = data_path
         self.sample_rate = sample_rate
@@ -100,6 +100,7 @@ class CustomFastMRIDataSet(Dataset):
         full_kspace_cropped=fft2(full_image_cropped)
         
         csm=T.center_crop(csm,(320,320))
+        full_kspace_cropped=full_kspace_cropped/full_kspace_cropped.abs().max()
 
         return {0:full_kspace_cropped*1e6, 1:csm, 2:[mask.sample(item) for mask in self.masks], 3:file.name, 4:slice_id, 5:[mask.mask_prob for mask in self.masks]}
     
@@ -135,14 +136,4 @@ class CustomFastMRIDataSet(Dataset):
             "encoding_size": enc_size,
             "recon_size": recon_size,
         }
-
-class CustomNormFastMRIDataSet(CustomFastMRIDataSet):
-    def __init__(self, data_path, mask_configs, sample_rate):
-        super().__init__(data_path, mask_configs, sample_rate)
-
-    def __getitem__(self, item):
-        d=super().__getitem__(item)
-        d[0]=d[0]/1e6
-        d[0]=d[0]/d[0].abs().max()
-
-        return d
+        return metadata, num_slices
